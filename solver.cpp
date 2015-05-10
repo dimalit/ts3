@@ -17,7 +17,7 @@ double theta_e, delta_e, r_e, gamma_0_2;
 double a0;
 
 const double PI = 4*atan(1.0);
-//now we havee a0 in state at protobuf: double *array_a0;					// needed for RHS
+//now we have a0 in state at protobuf: double *array_a0;					// needed for RHS
 
 PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*);
 PetscErrorCode RHSFunction_tm(TS ts, PetscReal t,Vec in,Vec out,void*);
@@ -62,7 +62,7 @@ PetscErrorCode solve_abstract(Vec initial_state, int max_steps, double max_time,
 	ierr = TSSetRHSFunction(ts, NULL, rhs_function, 0);CHKERRQ(ierr);
 
 //	ierr = TSSetPostStep(ts, wrap_function);CHKERRQ(ierr);
-//!!!	ierr = TSMonitorSet(ts, wrap_function, NULL, NULL);CHKERRQ(ierr);
+	ierr = TSMonitorSet(ts, wrap_function, NULL, NULL);CHKERRQ(ierr);
 
 	ierr = TSSetType(ts, TSRK);CHKERRQ(ierr);
 	ierr = TSRKSetType(ts, TSRK4);CHKERRQ(ierr);
@@ -163,7 +163,6 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 	if(rank == 0){
 		dE = theta_e*E_e + 1.0/m*sum_sin;
 		dphi = ( delta_e*E_e + 1.0/m*sum_cos ) / E_e;
-		dphi = 0.0;//!!!
 			VecSetValue(out, 0, dE, INSERT_VALUES);
 			VecSetValue(out, 1, dphi, INSERT_VALUES);
 		VecAssemblyBegin(out);
@@ -182,17 +181,19 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 		int indices[] = {i, i+1, i+2};
 		VecGetValues(in, 3, indices, nak);
 
-//		double dn = -r_e*E_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
-//		double da = -n*E_e*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
-//		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])-n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*sin(2*PI*nak[2]+phi_e);
+		double dn = -r_e*E_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
+		double da = -n*E_e*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
+		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])-n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*sin(2*PI*nak[2]+phi_e);
 
-		double dn = 0;//-r_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
-		double da = -sin(2*PI*nak[2]+phi_e);
-		double dk = -1.0 + 1.0/nak[1]*sin(2*PI*nak[2]+phi_e);
+		// just show the problem with stiffness
+//		double dn = 0;//-r_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
+//		double da = -sin(2*PI*nak[2]+phi_e);
+//		double dk = -1.0 + 1.0/nak[1]*sin(2*PI*nak[2]+phi_e);
 
 		//another version that behaves the same way as TM when n=-1
 		//double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])+n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*cos(2*PI*nak[2]+phi_e);
-			dk /= 2*PI;
+
+		dk /= 2*PI;
 
 		// compute full sin arg and limit it to [-PI, PI]
 		double arg = 2*PI*nak[2]+phi_e;
@@ -200,18 +201,13 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 		if(arg > PI)
 			arg -= 2*PI;
 
-		if(fabs(sin(arg)) < 0.01){
-			//dk = dphi/2.0/PI;
-			//fprintf(stderr, "p[%d] = %lf\n", (i-lo)/3, sin(arg));
-		}// sin < 0.01
-
 		VecSetValue(out, i, dn, INSERT_VALUES);
 		VecSetValue(out, i+1, da, INSERT_VALUES);
 		VecSetValue(out, i+2, dk, INSERT_VALUES);
 
-		fprintf(stderr, "a:%lf\tksi:%lf\n", nak[1], nak[2]);
-		fprintf(stderr, "da:%lf\tdk:%lf\n", da, dk);
-		fflush(stderr);
+//		fprintf(stderr, "a:%lf\tksi:%lf\n", nak[1], nak[2]);
+//		fprintf(stderr, "da:%lf\tdk:%lf\n", da, dk);
+//		fflush(stderr);
 	}
 
 
