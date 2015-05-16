@@ -401,11 +401,6 @@ PetscErrorCode ijacobian_te(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 			double phin = 0.0;
 			double phia = 1.0/m*cos(2*PI*k+phi_e)*(Jn_(a) + a*Jn_2(a));
 			double phik = -1.0/m*a*Jn_(a)*sin(2*PI*k+phi_e)*2*PI;
-			if(t>12){
-				phin = 0.0;
-				phia = 0;
-				phik = 0;
-			}
 
 			MatSetValue(B, 1, j,   -phin, INSERT_VALUES);
 			MatSetValue(B, 1, j+1, -phia, INSERT_VALUES);
@@ -530,10 +525,10 @@ PetscErrorCode RHSFunction_tm(TS ts, PetscReal t,Vec in,Vec out,void*){
 	// compute derivatives of E_e and phi_e
 	if(rank == 0){
 		// RESOLVED: here appeared 2.0 and book should have E=E/sqrtR (without 2)
-		//double dE = theta_e*E_e + 1.0/m*sum_cos;
-		//double dphi = ( delta_e*E_e - 1.0/m*sum_sin ) / E_e;
-		double dE = theta_e*E_e + 2.0/m*sum_cos;
-		double dphi = (delta_e*E_e - 2.0/m*sum_sin) / E_e;
+		double dE = theta_e*E_e + 1.0/m*sum_cos;
+		double dphi = ( delta_e*E_e - 1.0/m*sum_sin ) / E_e;
+//		double dE = theta_e*E_e + 2.0/m*sum_cos;
+//		double dphi = (delta_e*E_e - 2.0/m*sum_sin) / E_e;
 			VecSetValue(out, 0, dE, INSERT_VALUES);
 			VecSetValue(out, 1, dphi, INSERT_VALUES);
 		VecAssemblyBegin(out);
@@ -688,7 +683,7 @@ PetscErrorCode ijacobian_tm(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 	// 2 compute E and phi
 	if(lo==0){
 		double Ee = theta_e;
-		double Ephi = 1.0/m * sum_sin;
+		double Ephi = -1.0/m * sum_sin;
 
 		MatSetValue(B, 0, 0, shift-Ee, INSERT_VALUES);
 		MatSetValue(B, 0, 1, -Ephi, INSERT_VALUES);
@@ -719,11 +714,6 @@ PetscErrorCode ijacobian_tm(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 			double phin = 0.0;
 			double phia = -1.0/m*Jn_(a)*sin(2*PI*k+phi_e);
 			double phik = -1.0/m*Jn(a)*cos(2*PI*k+phi_e)*2*PI;
-			if(t>12){
-				phin = 0.0;
-				phia = 0;
-				phik = 0;
-			}
 
 			MatSetValue(B, 1, j,   -phin, INSERT_VALUES);
 			MatSetValue(B, 1, j+1, -phia, INSERT_VALUES);
@@ -740,7 +730,7 @@ PetscErrorCode ijacobian_tm(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 		double ne = -r_e*Jn(a)*cos(2*PI*k + phi_e);
 		double nphi = r_e*E_e*Jn(a)*sin(2*PI*k + phi_e);
 		double nn = 0.0;
-		double na = r_e*E_e*Jn_(a)*sin(2*PI*k + phi_e);
+		double na = -r_e*E_e*Jn_(a)*cos(2*PI*k + phi_e);
 		double nk = r_e*E_e*Jn(a)*sin(2*PI*k + phi_e)*2*PI;
 
 		MatSetValue(B, i, 0, -ne, INSERT_VALUES);
@@ -768,8 +758,8 @@ PetscErrorCode ijacobian_tm(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 		double ke = n/a*Jn_(a)*sin(2*PI*k + phi_e) / 2.0 / PI;
 		double kphi = n*E_e/a*Jn_(a)*cos(2*PI*k + phi_e) / 2.0 / PI;
 		double kn = 1.0 / 2.0 / PI;
-		double ka = -n*gamma_0_2*r_e*a / 2.0 / PI + n*E_e*sin(2*PI*k + phi_e)*(Jn_2(a)*a + Jn_(a))/a/a / 2.0 / PI;
-		double kk = -n*E_e*Jn(a)*(1-n*n/a/a)*cos(2*PI*k + phi_e);//2*PI / 2.0 / PI;
+		double ka = -n*gamma_0_2*r_e*a / 2.0 / PI + n*E_e*sin(2*PI*k + phi_e)*(Jn_2(a)*a - Jn_(a))/a/a / 2.0 / PI;
+		double kk = n*E_e/a*Jn_(a)*cos(2*PI*k + phi_e);//2*PI / 2.0 / PI;
 
 		MatSetValue(B, i+2, 0, -ke, INSERT_VALUES);
 		MatSetValue(B, i+2, 1, -kphi, INSERT_VALUES);
