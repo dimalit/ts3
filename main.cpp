@@ -85,7 +85,8 @@ int main(int argc, char** argv){
 
 	// set global parameters
 	init_step = sconfig.init_step();
-	tolerance = sconfig.tolerance();
+	atolerance = sconfig.atol();
+	rtolerance = sconfig.rtol();
 	m = pconfig.m();
 	n = pconfig.n();
 	theta_e = pconfig.theta_e();
@@ -93,6 +94,13 @@ int main(int argc, char** argv){
 	r_e = pconfig.r_e();
 	gamma_0_2 = pconfig.gamma_0_2();
 	a0 = state.a0();
+
+	use_ifunction = false;
+	use_ijacobian = false;
+	if(sconfig.solver()!=sconfig.rhs)
+		use_ifunction = true;
+	if(sconfig.solver()==sconfig.ijacobian)
+		use_ijacobian = true;
 
 	Vec u;
 	VecCreate(PETSC_COMM_WORLD, &u);
