@@ -30,34 +30,32 @@ PetscErrorCode ijacobian_te(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 PetscErrorCode ifunction_tm(TS ts,PetscReal t,Vec X,Vec Xdot,Vec F,void *ctx);
 PetscErrorCode ijacobian_tm(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Mat A, Mat B,void *ctx);
 
-PetscErrorCode solve_abstract(Vec initial_state, int max_steps, double max_time,
-		   Vec* out_state, Vec* out_rhs, int* out_steps, double* out_time, PetscErrorCode (*rhs_function)(TS ts, PetscReal t,Vec in,Vec out,void*), TSIFunction, TSIJacobian);
+PetscErrorCode solve_abstract(Vec initial_state, TSRHSFunction* rhs_function,
+		   TSIFunction ifunction, TSIJacobian ijacobian, int max_steps, double max_time,
+		   void (*step_func)(Vec state, Vec rhs, int steps, double time));
+PetscErrorCode step_monitor(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx);
 
 PetscErrorCode solve_te(Vec initial_state, int max_steps, double max_time,
-		   Vec* out_state, Vec* out_rhs, int* out_steps, double* out_time)
+		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
 {
 	if(use_ifunction)
-		return solve_abstract(initial_state, max_steps, max_time,
-			   	   	   	  out_state, out_rhs, out_steps, out_time, RHSFunction_te, ifunction_te, ijacobian_te);
+		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_te, ifunction_te, ijacobian_te, max_steps, max_time, step_func);
 	else
-		return solve_abstract(initial_state, max_steps, max_time,
-					   	  out_state, out_rhs, out_steps, out_time, RHSFunction_te, NULL, NULL);
+		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_te, NULL, NULL, max_steps, max_time, step_func);
 }
 
 PetscErrorCode solve_tm(Vec initial_state, int max_steps, double max_time,
-		   Vec* out_state, Vec* out_rhs, int* out_steps, double* out_time)
+		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
 {
 	if(use_ifunction)
-		return solve_abstract(initial_state, max_steps, max_time,
-			   	   	   	  out_state, out_rhs, out_steps, out_time, RHSFunction_tm, ifunction_tm, ijacobian_tm);
+		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_tm, ifunction_tm, ijacobian_tm, max_steps, max_time, step_func);
 	else
-		return solve_abstract(initial_state, max_steps, max_time,
-					   	  out_state, out_rhs, out_steps, out_time, RHSFunction_tm, NULL, NULL);
+		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_tm, NULL, NULL, max_steps, max_time, step_func);
 }
 
-PetscErrorCode solve_abstract(Vec initial_state, int max_steps, double max_time,
-		   Vec* out_state, Vec* out_rhs, int* out_steps, double* out_time, PetscErrorCode (*rhs_function)(TS ts, PetscReal t,Vec in,Vec out,void*),
-		   TSIFunction ifunction, TSIJacobian ijacobian)
+PetscErrorCode solve_abstract(Vec initial_state, TSRHSFunction* rhs_function,
+		   TSIFunction ifunction, TSIJacobian ijacobian, int max_steps, double max_time,
+		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
 {
 	fprintf(stderr, "+");
 	fflush(stderr);
@@ -77,7 +75,8 @@ PetscErrorCode solve_abstract(Vec initial_state, int max_steps, double max_time,
 	if(!ifunction){
 		ierr = TSSetType(ts, TSRK);CHKERRQ(ierr);
 		ierr = TSRKSetType(ts, TSRK4);CHKERRQ(ierr);
-		ierr = TSSetRHSFunction(ts, NULL, rhs_function, 0);CHKERRQ(ierr);
+		// XXX: strange cast - should work without it too!
+		ierr = TSSetRHSFunction(ts, NULL, (PetscErrorCode (*)(TS,PetscReal,Vec,Vec,void*))rhs_function, 0);CHKERRQ(ierr);
 	}
 	else{
 		ierr = TSSetType(ts, TSROSW);CHKERRQ(ierr);
@@ -100,37 +99,41 @@ PetscErrorCode solve_abstract(Vec initial_state, int max_steps, double max_time,
 
 	ierr = TSSetInitialTimeStep(ts, 0.0, init_step);CHKERRQ(ierr);
 	ierr = TSSetTolerances(ts, atolerance, NULL, rtolerance, NULL);CHKERRQ(ierr);
-	ierr = TSSetDuration(ts, max_steps, max_time);CHKERRQ(ierr);
+//	fprintf(stderr, "steps=%d time=%lf ", max_steps, max_time);
 
 	ierr = TSSetFromOptions(ts);CHKERRQ(ierr);
 
-	ierr = TSSolve(ts, initial_state);CHKERRQ(ierr);
+	ierr = TSSetSolution(ts, initial_state);CHKERRQ(ierr);
 
-//	delete[] array_a0;
+	ierr = TSSetDuration(ts, max_steps, max_time);CHKERRQ(ierr);
 
-	// get final state
-	Vec out;
-	ierr = TSGetSolution(ts, &out);CHKERRQ(ierr);
-	ierr = VecDuplicate(out, out_state);CHKERRQ(ierr);
-	ierr = VecCopy(out, *out_state);CHKERRQ(ierr);
-
-	// get final step and time
-	TSGetTime(ts, out_time);
-	TSGetTimeStepNumber(ts, out_steps);
-
-	// get final RHS
-	ierr = VecDuplicate(*out_state, out_rhs);CHKERRQ(ierr);			// use same dimensions
-	rhs_function(ts, *out_time, *out_state, *out_rhs, NULL);
+	ierr = TSMonitorSet(ts, step_monitor, (void*)step_func, NULL);
+	ierr = TSSolve(ts, initial_state);CHKERRQ(ierr);			// results are "returned" in step_monitor
 
 	double tstep;
 	TSGetTimeStep(ts, &tstep);
 	fprintf(stderr, "%lf", tstep);
-	fflush(stderr);
-
-	TSDestroy(&ts);
-
 	fprintf(stderr, "- ");
 	fflush(stderr);
+
+
+	TSDestroy(&ts);
+	return 0;
+}
+
+PetscErrorCode step_monitor(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx){
+	void (*step_func)(Vec state, Vec rhs, int steps, double time) = (void (*)(Vec state, Vec rhs, int steps, double time)) mctx;
+
+	PetscErrorCode ierr;
+
+	// get final RHS
+	Vec rhs;
+	ierr = TSGetRHSFunction(ts, &rhs, NULL, NULL);CHKERRQ(ierr);
+
+	PetscInt true_steps;
+	TSGetTimeStepNumber(ts, &true_steps);
+
+	step_func(u, rhs, true_steps, time);
 
 	return 0;
 }
@@ -220,7 +223,7 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 
 		double dn = -r_e*E_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
 		double da = -n*E_e*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
-		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])-n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*sin(2*PI*nak[2]+phi_e);
+		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])+n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*cos(2*PI*nak[2]+phi_e);
 
 		// just show the problem with stiffness
 //		double dn = 0;//-r_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
@@ -308,7 +311,7 @@ PetscErrorCode ifunction_te(TS ts,PetscReal t,Vec X,Vec Xdot,Vec F,void *ctx){
 
 		double dn = -r_e*E_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
 		double da = -n*E_e*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
-		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])-n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*sin(2*PI*nak[2]+phi_e);
+		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])+n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*cos(2*PI*nak[2]+phi_e);
 
 		dk /= 2*PI;
 
@@ -442,11 +445,11 @@ PetscErrorCode ijacobian_te(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 		MatSetValue(B, i+1, i+2,      -ak, INSERT_VALUES);
 
 		// k
-		double ke = -n*Jn(a)*(1-n*n/a/a)*sin(2*PI*k + phi_e) / 2.0 / PI;
-		double kphi = -n*E_e*Jn(a)*(1-n*n/a/a)*cos(2*PI*k + phi_e) / 2.0 / PI;
+		double ke = n*Jn(a)*(1-n*n/a/a)*cos(2*PI*k + phi_e) / 2.0 / PI;
+		double kphi = -n*E_e*Jn(a)*(1-n*n/a/a)*sin(2*PI*k + phi_e) / 2.0 / PI;
 		double kn = 1.0 / 2.0 / PI;
-		double ka = -n*gamma_0_2*r_e*a / 2.0 / PI - n*E_e*sin(2*PI*k + phi_e)*(2*Jn(a)/a/a/a + Jn_(a)*(1-n*n/a/a)) / 2.0 / PI;
-		double kk = -n*E_e*Jn(a)*(1-n*n/a/a)*cos(2*PI*k + phi_e);//2*PI / 2.0 / PI;
+		double ka = n*gamma_0_2*r_e*a / 2.0 / PI - n*E_e*cos(2*PI*k + phi_e)*(2*Jn(a)/a/a/a + Jn_(a)*(1-n*n/a/a)) / 2.0 / PI;
+		double kk = -n*E_e*Jn(a)*(1-n*n/a/a)*sin(2*PI*k + phi_e);//2*PI / 2.0 / PI;
 
 		MatSetValue(B, i+2, 0, -ke, INSERT_VALUES);
 		MatSetValue(B, i+2, 1, -kphi, INSERT_VALUES);

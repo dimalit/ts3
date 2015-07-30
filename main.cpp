@@ -6,12 +6,15 @@
  */
 
 #include <model_e3.pb.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <google/protobuf/io/coded_stream.h>
 using namespace pb;
 
 #include "solver.h"
 
 #include <petscts.h>
 #include <mpi.h>
+#include <cstring>
 #include <unistd.h>
 
 E3Config pconfig;
@@ -20,9 +23,13 @@ E3State state;
 
 int rank;
 int size;
+clock_t t1;		// for time counting in step_func
+int max_steps; double max_time;
+bool use_step = false;
 
 void vec_to_state(Vec v, E3State*);
 void state_to_vec(const E3State* state, Vec v);
+void step_func(Vec u, Vec rhs, int steps, double time);
 
 // TMP
 //#include <fcntl.h>
@@ -47,6 +54,23 @@ void broadcast_message(google::protobuf::Message& msg){
 	delete[] buf;
 }
 
+void parse_with_prefix(google::protobuf::Message& msg, int fd){
+	int size;
+	int ok = read(fd, &size, sizeof(size));
+	assert(ok == sizeof(size));
+
+	//TODO:without buffer cannot read later bytes
+	char *buf = (char*)malloc(size);
+	int read_size = 0;
+	while(read_size != size){
+		ok = read(fd, buf+read_size, size-read_size);
+		read_size+=ok;
+		assert(ok > 0 || read_size==size);
+	}
+	msg.ParseFromArray(buf, size);
+	free(buf);
+}
+
 int main(int argc, char** argv){
 
 //	int go = 0;
@@ -57,28 +81,27 @@ int main(int argc, char** argv){
 //	close(0);
 //	open("../ode-env/all.tmp", O_RDONLY);
 
+	if(argc > 1 && strcmp(argv[1], "use_step")==0){
+		use_step = true;
+		argc--;
+		argv++;
+	}
+
 	PetscErrorCode ierr;
 	ierr = PetscInitialize(&argc, &argv, (char*)0, (char*)0);CHKERRQ(ierr);
 
 	ierr = MPI_Comm_rank(PETSC_COMM_WORLD, &rank);CHKERRQ(ierr);
 	ierr = MPI_Comm_size(PETSC_COMM_WORLD, &size);CHKERRQ(ierr);
 
-	int max_steps; double max_time;
-
 	if(rank==0){
 		E3Model all;
-		all.ParseFromFileDescriptor(0);
-
-		max_steps = all.steps();
-		max_time = all.time();
+		//all.ParseFromFileDescriptor(0);
+		parse_with_prefix(all, 0);
 
 		sconfig.CopyFrom(all.sconfig());
 		pconfig.CopyFrom(all.pconfig());
 		state.CopyFrom(all.state());
 	}
-
-	MPI_Bcast(&max_steps, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-	MPI_Bcast(&max_time, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 
 	broadcast_message(sconfig);
 	broadcast_message(pconfig);
@@ -108,22 +131,40 @@ int main(int argc, char** argv){
 	VecSetSizes(u, PETSC_DECIDE, pconfig.m()*3+2);
 	state_to_vec(&state, u);
 
-	Vec res, res_rhs;
-	int res_steps;
-	double res_time;
+	int ok;
+	ok = read(0, &max_steps, sizeof(max_steps));
+		assert(ok==sizeof(max_steps));
+	ok = read(0, &max_time, sizeof(max_time));
+		assert(ok==sizeof(max_time));
+
+	MPI_Bcast(&max_steps, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+	MPI_Bcast(&max_time, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+
+	t1 = clock();
 
 	if(sconfig.model() == "te")
-		solve_te(u, max_steps, max_time, &res, &res_rhs, &res_steps, &res_time);
+		solve_te(u, max_steps, max_time, step_func);
 	else if(sconfig.model() == "tm")
-		solve_tm(u, max_steps, max_time, &res, &res_rhs, &res_steps, &res_time);
+		solve_tm(u, max_steps, max_time, step_func);
 	else{
 		fprintf(stderr, "assert");
 		fflush(stderr);
 		assert(false);
 	}
 
-	//void wrap_ksi_in_vec(Vec u);
-	//wrap_ksi_in_vec(res);
+	VecDestroy(&u);
+
+	ierr = PetscFinalize();CHKERRQ(ierr);
+	return 0;
+}
+
+void step_func(Vec res, Vec res_rhs, int res_steps, double res_time){
+	clock_t t2 = clock();
+	double dtime = (double)(t2-t1)/CLOCKS_PER_SEC;
+	fprintf(stderr, "wt=%.3lf ", dtime);
+
+	if(!use_step && res_steps < max_steps && res_time < max_time)
+		return;
 
 	E3Solution sol;
 	for(int i=0; i<m; i++){
@@ -142,15 +183,13 @@ int main(int argc, char** argv){
 		write(1, &res_time, sizeof(res_time));
 
 		// 2 write state
+		int size = sol.ByteSize();
+		write(1, &size, sizeof(size));
+//		fprintf(stderr, "size=%d text:%s", size, sol.DebugString().c_str());
 		sol.SerializeToFileDescriptor(1);
 	}
 
-	VecDestroy(&u);
-	VecDestroy(&res);
-	VecDestroy(&res_rhs);
-
-	ierr = PetscFinalize();CHKERRQ(ierr);
-	return 0;
+	t1 = t2;
 }
 
 void state_to_vec(const E3State* state, Vec v){

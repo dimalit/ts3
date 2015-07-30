@@ -19,11 +19,9 @@ extern double theta_e, delta_e, r_e, gamma_0_2;
 extern double a0;
 extern bool use_ifunction, use_ijacobian;
 
-// both out vectors must be destroyed outside
-PetscErrorCode solve_te(Vec initial_state, int max_steps, double max_time,
-		   Vec* out_state, Vec* out_rhs, int* out_steps, double* out_time);
-
-PetscErrorCode solve_tm(Vec initial_state, int max_steps, double max_time,
-		   Vec* out_state, Vec* out_rhs, int* out_steps, double* out_time);
+extern PetscErrorCode solve_te(Vec initial_state, int max_steps, double max_time,
+		   void (*step_func)(Vec state, Vec rhs, int steps, double time));
+extern PetscErrorCode solve_tm(Vec initial_state, int max_steps, double max_time,
+		   void (*step_func)(Vec state, Vec rhs, int steps, double time));
 
 #endif /* SOLVER_H_ */

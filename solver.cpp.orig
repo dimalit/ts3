@@ -1,0 +1,117 @@
+/*
+ * solver.cpp
+ *
+ *  Created on: Feb 19, 2015
+ *      Author: dimalit
+ */
+
+#include "solver.h"
+
+PetscErrorCode RHSFunction(TS ts, PetscReal t,Vec in,Vec out,void*);
+
+const double PI = 4*atan(1.0);
+
+void solve(Vec initial_state, int max_steps, double max_time,
+		   Vec* out_state, int* out_steps, double* out_time)
+{
+	TS ts;
+
+	ierr = TSCreate(PETSC_COMM_WORLD, &ts);CHKERRQ(ierr);
+	ierr = TSSetProblemType(ts, TS_NONLINEAR);CHKERRQ(ierr);
+	// !!! NULL added because of petsc update
+	ierr = TSSetRHSFunction(ts, NULL, RHSFunction, 0);CHKERRQ(ierr);
+
+	ierr = TSSetType(ts, TSRK);CHKERRQ(ierr);
+
+	ierr = TSSetInitialTimeStep(ts, 0.0, sconfig.init_step());CHKERRQ(ierr);
+	ierr = TSRKSetTolerance(ts, sconfig.tolerance());CHKERRQ(ierr);
+	ierr = TSSetDuration(ts, max_steps, max_time);CHKERRQ(ierr);
+
+	ierr = TSSetFromOptions(ts);CHKERRQ(ierr);
+
+	ierr = TSSolve(ts, u);CHKERRQ(ierr);
+
+	delete[] array_a0;
+}
+
+
+PetscErrorCode RHSFunction(TS ts, PetscReal t,Vec in,Vec out,void*){
+	PetscErrorCode ierr;
+
+	// bcast E and phi
+	if(rank == 0){
+		int cnt[] = {0, 1};
+		double buf[2];
+		ierr = VecAssemblyBegin(in);CHKERRQ(ierr);
+		ierr = VecGetValues(in, 2, cnt, buf);CHKERRQ(ierr);
+		ierr = VecAssemblyEnd(in);CHKERRQ(ierr);
+		E_e = buf[0];
+		phi_e = buf[1];
+	}
+	MPI_Bcast(&E_e, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+	MPI_Bcast(&phi_e, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
+
+	// compute sums
+	int lo, hi;
+	VecGetOwnershipRange(in, &lo, &hi);
+	if(lo < 2)	// exclude E, phi
+		lo = 2;
+
+	VecAssemblyBegin(in);
+
+	double sum_sin = 0;
+	double sum_cos = 0;
+	for(int i=lo; i<hi; i+=3){
+		double nak[3];
+		int indices[] = {i, i+1, i+2};
+		VecGetValues(in, 3, indices, nak);
+		sum_sin += nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
+		sum_cos += nak[1]*Jn_(nak[1])*cos(2*PI*nak[2]+phi_e);
+	}
+	VecAssemblyEnd(in);
+
+	double tmp = 0;
+	MPI_Reduce(&sum_sin, &tmp, 1, MPI_DOUBLE, MPI_SUM, 0, PETSC_COMM_WORLD);
+		sum_sin = tmp;
+	tmp = 0;
+	MPI_Reduce(&sum_cos, &tmp, 1, MPI_DOUBLE, MPI_SUM, 0, PETSC_COMM_WORLD);
+		sum_cos = tmp;
+
+	// compute derivatives of E_e and phi_e
+	if(rank == 0){
+		double dE = pconfig.theta_e()*E_e + 1.0/pconfig.m()*sum_sin;
+		double dphi = ( pconfig.delta_e()*E_e + 1.0/pconfig.m()*sum_cos ) / E_e;
+		VecAssemblyBegin(out);
+			VecSetValue(out, 0, dE, INSERT_VALUES);
+			VecSetValue(out, 1, dphi, INSERT_VALUES);
+		VecAssemblyEnd(out);
+	}
+
+	// compute n, a, k
+	VecGetOwnershipRange(out, &lo, &hi);
+	if(lo < 2)
+		lo = 2;
+	VecAssemblyBegin(in);
+	VecAssemblyBegin(out);
+		for(int i=lo; i<hi; i+=3){
+			double nak[3];
+			int indices[] = {i, i+1, i+2};
+			VecGetValues(in, 3, indices, nak);
+
+			double dn = -pconfig.r_e()*E_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
+			double da = -pconfig.n()*E_e*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
+			double dk = nak[0] + 0.5*pconfig.n()*pconfig.gamma_0_2()*pconfig.r_e()*(array_a0[i-lo+1]*array_a0[i-lo+1] - nak[1]*nak[1])-pconfig.n()*E_e*Jn_(nak[1])*(1-1.0/pconfig.n()/pconfig.n())*sin(2*PI*nak[2]+phi_e);
+				dk /= 2*PI;
+
+			VecSetValue(out, i, dn, INSERT_VALUES);
+			VecSetValue(out, i+1, da, INSERT_VALUES);
+			VecSetValue(out, i+2, dk, INSERT_VALUES);
+		}
+	VecAssemblyEnd(out);
+	VecAssemblyEnd(in);
+
+//	VecView(in, PETSC_VIEWER_STDERR_WORLD);
+//	VecView(out, PETSC_VIEWER_STDERR_WORLD);
+
+	return 0;
+}
