@@ -35,15 +35,6 @@ PetscErrorCode solve_abstract(Vec initial_state, TSRHSFunction* rhs_function,
 		   void (*step_func)(Vec state, Vec rhs, int steps, double time));
 PetscErrorCode step_monitor(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx);
 
-PetscErrorCode solve_te(Vec initial_state, int max_steps, double max_time,
-		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
-{
-	if(use_ifunction)
-		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_te, ifunction_te, ijacobian_te, max_steps, max_time, step_func);
-	else
-		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_te, NULL, NULL, max_steps, max_time, step_func);
-}
-
 PetscErrorCode solve_tm(Vec initial_state, int max_steps, double max_time,
 		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
 {
@@ -53,12 +44,20 @@ PetscErrorCode solve_tm(Vec initial_state, int max_steps, double max_time,
 		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_tm, NULL, NULL, max_steps, max_time, step_func);
 }
 
+PetscErrorCode solve_te(Vec initial_state, int max_steps, double max_time,
+		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
+{
+	if(use_ifunction)
+		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_te, ifunction_te, ijacobian_te, max_steps, max_time, step_func);
+	else
+		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_te, NULL, NULL, max_steps, max_time, step_func);
+}
+
 PetscErrorCode solve_abstract(Vec initial_state, TSRHSFunction* rhs_function,
 		   TSIFunction ifunction, TSIJacobian ijacobian, int max_steps, double max_time,
 		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
 {
-	fprintf(stderr, "+");
-	fflush(stderr);
+//	VecView(initial_state, PETSC_VIEWER_STDERR_WORLD);
 
 	PetscErrorCode ierr;
 
@@ -112,10 +111,6 @@ PetscErrorCode solve_abstract(Vec initial_state, TSRHSFunction* rhs_function,
 
 	double tstep;
 	TSGetTimeStep(ts, &tstep);
-	fprintf(stderr, "%lf", tstep);
-	fprintf(stderr, "- ");
-	fflush(stderr);
-
 
 	TSDestroy(&ts);
 	return 0;
@@ -126,9 +121,14 @@ PetscErrorCode step_monitor(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx
 
 	PetscErrorCode ierr;
 
+	VecView(u, PETSC_VIEWER_STDERR_WORLD);
+
 	// get final RHS
 	Vec rhs;
 	ierr = TSGetRHSFunction(ts, &rhs, NULL, NULL);CHKERRQ(ierr);
+
+//	VecView(u, PETSC_VIEWER_STDERR_WORLD);
+//	VecView(rhs, PETSC_VIEWER_STDERR_WORLD);
 
 	PetscInt true_steps;
 	TSGetTimeStepNumber(ts, &true_steps);
@@ -165,13 +165,13 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 	double E_e, phi_e;
 
 	// bcast E and phi
+	const double* data;
+	ierr = VecGetArrayRead(in, &data);CHKERRQ(ierr);
 	if(rank == 0){
-		const double* data;
-		ierr = VecGetArrayRead(in, &data);CHKERRQ(ierr);
 		E_e =data[0];
 		phi_e = data[1];
-		ierr = VecRestoreArrayRead(in, &data);CHKERRQ(ierr);
 	}
+	ierr = VecRestoreArrayRead(in, &data);CHKERRQ(ierr);
 	MPI_Bcast(&E_e, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 	MPI_Bcast(&phi_e, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 
@@ -205,9 +205,9 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 		dphi = ( delta_e*E_e + 1.0/m*sum_cos ) / E_e;
 			VecSetValue(out, 0, dE, INSERT_VALUES);
 			VecSetValue(out, 1, dphi, INSERT_VALUES);
-		VecAssemblyBegin(out);
-		VecAssemblyEnd(out);
 	}
+	VecAssemblyBegin(out);
+	VecAssemblyEnd(out);
 	MPI_Bcast(&dE, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 	MPI_Bcast(&dphi, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
@@ -223,7 +223,14 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 
 		double dn = -r_e*E_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
 		double da = -n*E_e*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
-		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])+n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*cos(2*PI*nak[2]+phi_e);
+
+
+		//previous version - before simplifications - corresponds to Jacobians!!
+		//double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])+n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*cos(2*PI*nak[2]+phi_e);
+
+		// simplified version - contradicts to jacobians!!
+		// with + for consistency with previous!
+		double dk = nak[0]*(1-gamma_0_2) + n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*cos(2*PI*nak[2]+phi_e);
 
 		// just show the problem with stiffness
 //		double dn = 0;//-r_e*nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
@@ -254,6 +261,7 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 	return 0;
 }
 
+// TODO ifunction and ijacobian probably won't work with n>=2. And thay are for previous equations!
 PetscErrorCode ifunction_te(TS ts,PetscReal t,Vec X,Vec Xdot,Vec F,void *ctx){
 //	fprintf(stderr, "%s\n", __FUNCTION__);
 	int rank;
@@ -492,13 +500,13 @@ PetscErrorCode RHSFunction_tm(TS ts, PetscReal t,Vec in,Vec out,void*){
 	double E_e, phi_e;
 
 	// bcast E and phi
+	const double* data;
+	ierr = VecGetArrayRead(in, &data);CHKERRQ(ierr);
 	if(rank == 0){
-		const double* data;
-		ierr = VecGetArrayRead(in, &data);CHKERRQ(ierr);
 		E_e = data[0];
 		phi_e = data[1];
-		ierr = VecRestoreArrayRead(in, &data);CHKERRQ(ierr);
 	}
+	ierr = VecRestoreArrayRead(in, &data);CHKERRQ(ierr);
 	MPI_Bcast(&E_e, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 	MPI_Bcast(&phi_e, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
 
@@ -534,9 +542,9 @@ PetscErrorCode RHSFunction_tm(TS ts, PetscReal t,Vec in,Vec out,void*){
 //		double dphi = (delta_e*E_e - 2.0/m*sum_sin) / E_e;
 			VecSetValue(out, 0, dE, INSERT_VALUES);
 			VecSetValue(out, 1, dphi, INSERT_VALUES);
-		VecAssemblyBegin(out);
-		VecAssemblyEnd(out);
 	}
+	VecAssemblyBegin(out);
+	VecAssemblyEnd(out);
 
 	// compute n, a, k
 	VecGetOwnershipRange(out, &lo, &hi);
@@ -551,8 +559,15 @@ PetscErrorCode RHSFunction_tm(TS ts, PetscReal t,Vec in,Vec out,void*){
 //		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1]) + n*E_e/nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
 		double dn = -r_e*E_e*Jn(nak[1])*cos(2*PI*nak[2]+phi_e);
 		double da = -n/nak[1]*E_e*Jn(nak[1])*cos(2*PI*nak[2]+phi_e);
-		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1]) + n*E_e/nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
-			dk /= 2*PI;
+
+		//previous version - before simplifications - corresponds to Jacobians!!
+//		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1]) + n*E_e/nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
+
+		// simplified version - contradicts to jacobians!!
+		// with + for consistency with previous!
+		double dk = nak[0]*(1-gamma_0_2) + n*E_e/nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
+
+		dk /= 2*PI;
 
 		VecSetValue(out, i, dn, INSERT_VALUES);
 		VecSetValue(out, i+1, da, INSERT_VALUES);
@@ -790,23 +805,25 @@ void wrap_ksi_in_vec(Vec u){
 	int begin, end;
 	VecGetOwnershipRange(u, &begin, &end);
 
+	int rank;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+	if(rank==0)
+		begin = 2;
+
+	// need ksi only
+	begin += 2;
+
 	double* arr;
 	VecGetArray(u, &arr);
 
-	for(int i=0; i<(end-begin); i++){
-		// skip E, phi
-		if(begin+i <= 1)
-			continue;
-
-		// need ksi only
-		if((begin+i-2) % 3 == 2){
-			//fprintf(stderr, "%lf:", arr[i]);
-			if(arr[i] > 0.5)
-				arr[i] -= 1.0;
-			else if(arr[i] < -0.5)
-				arr[i] += 1.0;
-			//fprintf(stderr, "%lf ", arr[i]);
-		}// if ksi
+	for(int i=0; i<(end-begin); i+=3){
+		//fprintf(stderr, "%lf:", arr[i]);
+		if(arr[i] > 0.5)
+			arr[i] -= 1.0;
+		else if(arr[i] < -0.5)
+			arr[i] += 1.0;
+		//fprintf(stderr, "%lf ", arr[i]);
 	}
 	//fprintf(stderr, "\n");
 	VecRestoreArray(u, &arr);

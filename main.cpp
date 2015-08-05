@@ -101,7 +101,10 @@ int main(int argc, char** argv){
 		sconfig.CopyFrom(all.sconfig());
 		pconfig.CopyFrom(all.pconfig());
 		state.CopyFrom(all.state());
+
+		a0 = state.a0();
 	}
+	MPI_Bcast(&a0, 1, MPI_INT, 0, PETSC_COMM_WORLD);
 
 	broadcast_message(sconfig);
 	broadcast_message(pconfig);
@@ -116,7 +119,6 @@ int main(int argc, char** argv){
 	delta_e = pconfig.delta_e();
 	r_e = pconfig.r_e();
 	gamma_0_2 = pconfig.gamma_0_2();
-	a0 = state.a0();
 
 	use_ifunction = false;
 	use_ijacobian = false;
@@ -128,14 +130,19 @@ int main(int argc, char** argv){
 	Vec u;
 	VecCreate(PETSC_COMM_WORLD, &u);
 	VecSetType(u, VECMPI);
-	VecSetSizes(u, PETSC_DECIDE, pconfig.m()*3+2);
+
+	int addition = rank==0 ? 2 : 0;
+	VecSetSizes(u, addition+pconfig.m()*3/size, PETSC_DECIDE);
+
 	state_to_vec(&state, u);
 
-	int ok;
-	ok = read(0, &max_steps, sizeof(max_steps));
-		assert(ok==sizeof(max_steps));
-	ok = read(0, &max_time, sizeof(max_time));
-		assert(ok==sizeof(max_time));
+	if(rank == 0){
+		int ok;
+		ok = read(0, &max_steps, sizeof(max_steps));
+			assert(ok==sizeof(max_steps));
+		ok = read(0, &max_time, sizeof(max_time));
+			assert(ok==sizeof(max_time));
+	}
 
 	MPI_Bcast(&max_steps, 1, MPI_INT, 0, PETSC_COMM_WORLD);
 	MPI_Bcast(&max_time, 1, MPI_DOUBLE, 0, PETSC_COMM_WORLD);
@@ -158,18 +165,19 @@ int main(int argc, char** argv){
 	return 0;
 }
 
-void step_func(Vec res, Vec res_rhs, int res_steps, double res_time){
+void step_func(Vec res, Vec res_rhs, int passed_steps, double passed_time){
 	clock_t t2 = clock();
 	double dtime = (double)(t2-t1)/CLOCKS_PER_SEC;
-	fprintf(stderr, "wt=%.3lf ", dtime);
 
-	if(!use_step && res_steps < max_steps && res_time < max_time)
+	if(!use_step && passed_steps < max_steps && passed_time < max_time)
 		return;
 
 	E3Solution sol;
-	for(int i=0; i<m; i++){
-		sol.mutable_state()->add_particles();
-		sol.mutable_d_state()->add_particles();
+	if(rank==0){
+		for(int i=0; i<m; i++){
+			sol.mutable_state()->add_particles();
+			sol.mutable_d_state()->add_particles();
+		}
 	}
 
 	vec_to_state(res, sol.mutable_state());
@@ -179,8 +187,8 @@ void step_func(Vec res, Vec res_rhs, int res_steps, double res_time){
 
 	if(rank == 0){
 		// 1 write time and steps
-		write(1, &res_steps, sizeof(res_steps));
-		write(1, &res_time, sizeof(res_time));
+		write(1, &passed_steps, sizeof(passed_steps));
+		write(1, &passed_time, sizeof(passed_time));
 
 		// 2 write state
 		int size = sol.ByteSize();
@@ -197,22 +205,18 @@ void state_to_vec(const E3State* state, Vec v){
 	VecGetSize(v, &vecsize);
 	assert(vecsize == pconfig.m()*3+2);
 
-	// 1 write E and phi
-	if(rank == 0){
-		VecSetValue(v, 0, state->e(), INSERT_VALUES);
-		VecSetValue(v, 1, state->phi(), INSERT_VALUES);
-	}
-	VecAssemblyBegin(v);
-	VecAssemblyEnd(v);
-
-	// 2 scatter data!
 	double *arr;
 	VecGetArray(v, &arr);
 
-	PetscInt* borders = new PetscInt[size+1];
+	PetscInt* borders;
 	VecGetOwnershipRanges(v, (const PetscInt**)&borders);
 
 	if(rank == 0){
+
+		// write E and phi
+		arr[0] = state->e();
+		arr[1] = state->phi();
+
 		for(int r = size-1; r>=0; r--){		// go down - because last will be mine
 			int lo = borders[r];
 			int hi = borders[r+1];
@@ -225,23 +229,24 @@ void state_to_vec(const E3State* state, Vec v){
 			int first = (lo-2) / 3;
 			int count = (hi - lo) / 3;
 
-			int add = r==0 ? 2 : 0;
 			for(int i=0; i<count; i++){
 				E3State::Particles p = state->particles(first+i);
-				arr[add + i*3+0] = p.eta();
-				arr[add + i*3+1] = p.a();
-				arr[add + i*3+2] = p.ksi();
+				arr[2 + i*3+0] = p.eta();
+				arr[2 + i*3+1] = p.a();
+				arr[2 + i*3+2] = p.ksi();
 			}
 
 			if(r!=0)
-				MPI_Send(arr, count*3, MPI_DOUBLE, r, 0, PETSC_COMM_WORLD);
+				MPI_Send(arr+2, count*3, MPI_DOUBLE, r, 0, PETSC_COMM_WORLD);
 
 		}// for
+
 	}// if rank == 0
 	else{
 		int count3 = borders[rank+1] - borders[rank];
 		MPI_Status s;
-		assert(MPI_SUCCESS == MPI_Recv(arr, count3, MPI_DOUBLE, 0, 0, PETSC_COMM_WORLD, &s));
+		int ierr = MPI_Recv(arr, count3, MPI_DOUBLE, 0, 0, PETSC_COMM_WORLD, &s);
+		assert(MPI_SUCCESS == ierr);
 	}// if rank != 0
 
 	VecRestoreArray(v, &arr);
@@ -251,10 +256,12 @@ void vec_to_state(Vec v, E3State* state){
 	double *arr;
 	VecGetArray(v, &arr);
 
-	PetscInt* borders = new PetscInt[size+1];
+	PetscInt* borders;
 	VecGetOwnershipRanges(v, (const PetscInt**)&borders);
 
 	if(rank == 0){
+
+		PetscScalar* buf = (PetscScalar*)malloc(sizeof(PetscScalar)*(borders[1]-borders[0]));
 
 		state->set_e(arr[0]);
 		state->set_phi(arr[1]);
@@ -272,21 +279,25 @@ void vec_to_state(Vec v, E3State* state){
 			int count = (hi - lo) / 3;
 
 			MPI_Status s;
-			if(r!=0)
-				assert(MPI_SUCCESS == MPI_Recv(arr, count*3, MPI_DOUBLE, r, 0, PETSC_COMM_WORLD, &s));
+			if(r!=0){
+				int ok = MPI_Recv(buf, count*3, MPI_DOUBLE, r, 0, PETSC_COMM_WORLD, &s);
+				assert(MPI_SUCCESS == ok);
+			}
 
-			int add = r==0 ? 2 : 0;
 			for(int i=0; i<count; i++){
 				E3State::Particles* p = state->mutable_particles(first+i);
-				p->set_eta(arr[add + i*3+0]);
-				p->set_a(arr[add + i*3+1]);
-				p->set_ksi(arr[add + i*3+2]);
+				p->set_eta(buf[2 + i*3+0]);
+				p->set_a(buf[2 + i*3+1]);
+				p->set_ksi(buf[2 + i*3+2]);
 			}
 		}// for
+
+		free(buf);
 	}// if rank == 0
 	else{
 		int count3 = borders[rank+1] - borders[rank];
-		assert(MPI_SUCCESS == MPI_Send(arr, count3, MPI_DOUBLE, 0, 0, PETSC_COMM_WORLD));
+		int ierr = MPI_Send(arr, count3, MPI_DOUBLE, 0, 0, PETSC_COMM_WORLD);
+		assert(MPI_SUCCESS == ierr);
 	}// if rank != 0
 
 	VecRestoreArray(v, &arr);
