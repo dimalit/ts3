@@ -20,8 +20,8 @@ extern double a0;
 extern bool use_ifunction, use_ijacobian;
 
 extern PetscErrorCode solve_te(Vec initial_state, int max_steps, double max_time,
-		   void (*step_func)(Vec state, Vec rhs, int steps, double time));
+		   bool (*step_func)(Vec state, Vec rhs, int steps, double time));
 extern PetscErrorCode solve_tm(Vec initial_state, int max_steps, double max_time,
-		   void (*step_func)(Vec state, Vec rhs, int steps, double time));
+		   bool (*step_func)(Vec state, Vec rhs, int steps, double time));
 
 #endif /* SOLVER_H_ */

@@ -29,7 +29,7 @@ bool use_step = false;
 
 void vec_to_state(Vec v, E3State*);
 void state_to_vec(const E3State* state, Vec v);
-void step_func(Vec u, Vec rhs, int steps, double time);
+bool step_func(Vec u, Vec rhs, int steps, double time);
 
 // TMP
 //#include <fcntl.h>
@@ -165,12 +165,27 @@ int main(int argc, char** argv){
 	return 0;
 }
 
-void step_func(Vec res, Vec res_rhs, int passed_steps, double passed_time){
+bool step_func(Vec res, Vec res_rhs, int passed_steps, double passed_time){
 	clock_t t2 = clock();
 	double dtime = (double)(t2-t1)/CLOCKS_PER_SEC;
 
+	// return if not using steps
 	if(!use_step && passed_steps < max_steps && passed_time < max_time)
-		return;
+		return true;
+	// wait if using steps
+	else if(use_step){
+		int ok;
+		char c;
+		if(rank==0){
+			ok = read(0, &c, sizeof(c));
+				assert(ok==sizeof(c));
+		}
+		MPI_Bcast(&c, 1, MPI_BYTE, 0, PETSC_COMM_WORLD);
+		if(c=='f')
+			return false;			// finish!
+		assert(c=='s');
+	}// if use_steps
+
 
 	E3Solution sol;
 	if(rank==0){
@@ -193,11 +208,11 @@ void step_func(Vec res, Vec res_rhs, int passed_steps, double passed_time){
 		// 2 write state
 		int size = sol.ByteSize();
 		write(1, &size, sizeof(size));
-//		fprintf(stderr, "size=%d text:%s", size, sol.DebugString().c_str());
 		sol.SerializeToFileDescriptor(1);
 	}
 
 	t1 = t2;
+	return true;
 }
 
 void state_to_vec(const E3State* state, Vec v){
@@ -269,10 +284,8 @@ void vec_to_state(Vec v, E3State* state){
 		for(int r = 0; r<size; r++){
 			int lo = borders[r];
 			int hi = borders[r+1];
-			if(r==0)
-				lo += 2;
 
-			assert((lo-2)%3 == 0);
+			assert((lo-2)%3 == 0 || lo==0);
 			assert((hi-2)%3 == 0);
 
 			int first = (lo-2) / 3;
@@ -283,12 +296,14 @@ void vec_to_state(Vec v, E3State* state){
 				int ok = MPI_Recv(buf, count*3, MPI_DOUBLE, r, 0, PETSC_COMM_WORLD, &s);
 				assert(MPI_SUCCESS == ok);
 			}
+			else	// copy only particles (arr+2)
+				memcpy(buf, arr+2, sizeof(PetscScalar)*(hi-lo-2));
 
 			for(int i=0; i<count; i++){
 				E3State::Particles* p = state->mutable_particles(first+i);
-				p->set_eta(buf[2 + i*3+0]);
-				p->set_a(buf[2 + i*3+1]);
-				p->set_ksi(buf[2 + i*3+2]);
+				p->set_eta(buf[i*3+0]);
+				p->set_a(buf[i*3+1]);
+				p->set_ksi(buf[i*3+2]);
 			}
 		}// for
 

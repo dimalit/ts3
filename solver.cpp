@@ -32,11 +32,11 @@ PetscErrorCode ijacobian_tm(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 
 PetscErrorCode solve_abstract(Vec initial_state, TSRHSFunction* rhs_function,
 		   TSIFunction ifunction, TSIJacobian ijacobian, int max_steps, double max_time,
-		   void (*step_func)(Vec state, Vec rhs, int steps, double time));
+		   bool (*step_func)(Vec state, Vec rhs, int steps, double time));
 PetscErrorCode step_monitor(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx);
 
 PetscErrorCode solve_tm(Vec initial_state, int max_steps, double max_time,
-		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
+		   bool (*step_func)(Vec state, Vec rhs, int steps, double time))
 {
 	if(use_ifunction)
 		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_tm, ifunction_tm, ijacobian_tm, max_steps, max_time, step_func);
@@ -45,7 +45,7 @@ PetscErrorCode solve_tm(Vec initial_state, int max_steps, double max_time,
 }
 
 PetscErrorCode solve_te(Vec initial_state, int max_steps, double max_time,
-		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
+		   bool (*step_func)(Vec state, Vec rhs, int steps, double time))
 {
 	if(use_ifunction)
 		return solve_abstract(initial_state, (TSRHSFunction*)RHSFunction_te, ifunction_te, ijacobian_te, max_steps, max_time, step_func);
@@ -55,7 +55,7 @@ PetscErrorCode solve_te(Vec initial_state, int max_steps, double max_time,
 
 PetscErrorCode solve_abstract(Vec initial_state, TSRHSFunction* rhs_function,
 		   TSIFunction ifunction, TSIJacobian ijacobian, int max_steps, double max_time,
-		   void (*step_func)(Vec state, Vec rhs, int steps, double time))
+		   bool (*step_func)(Vec state, Vec rhs, int steps, double time))
 {
 //	VecView(initial_state, PETSC_VIEWER_STDERR_WORLD);
 
@@ -117,11 +117,11 @@ PetscErrorCode solve_abstract(Vec initial_state, TSRHSFunction* rhs_function,
 }
 
 PetscErrorCode step_monitor(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx){
-	void (*step_func)(Vec state, Vec rhs, int steps, double time) = (void (*)(Vec state, Vec rhs, int steps, double time)) mctx;
+	bool (*step_func)(Vec state, Vec rhs, int steps, double time) = (bool (*)(Vec state, Vec rhs, int steps, double time)) mctx;
 
 	PetscErrorCode ierr;
 
-	VecView(u, PETSC_VIEWER_STDERR_WORLD);
+//	VecView(u, PETSC_VIEWER_STDERR_WORLD);
 
 	// get final RHS
 	Vec rhs;
@@ -133,7 +133,11 @@ PetscErrorCode step_monitor(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx
 	PetscInt true_steps;
 	TSGetTimeStepNumber(ts, &true_steps);
 
-	step_func(u, rhs, true_steps, time);
+	bool res = step_func(u, rhs, true_steps, time);
+	if(!res){
+		//TSSetConvergedReason(ts, TS_CONVERGED_USER);
+		TSSetDuration(ts, steps, time);
+	}
 
 	return 0;
 }
@@ -156,8 +160,10 @@ double Jn_2(double x){
 }
 
 PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
-//	fprintf(stderr, "%s\n", __FUNCTION__);
+	//	fprintf(stderr, "%s\n", __FUNCTION__);
 	PetscErrorCode ierr;
+
+//	VecView(in, PETSC_VIEWER_STDERR_WORLD);
 
 	int rank;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -229,7 +235,7 @@ PetscErrorCode RHSFunction_te(TS ts, PetscReal t,Vec in,Vec out,void*){
 		//double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1])+n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*cos(2*PI*nak[2]+phi_e);
 
 		// simplified version - contradicts to jacobians!!
-		// with + for consistency with previous!
+		// +nE was before, -nE got from Kuklin with simplyfied eqns
 		double dk = nak[0]*(1-gamma_0_2) + n*E_e*Jn(nak[1])*(1-n*n/nak[1]/nak[1])*cos(2*PI*nak[2]+phi_e);
 
 		// just show the problem with stiffness
@@ -564,7 +570,6 @@ PetscErrorCode RHSFunction_tm(TS ts, PetscReal t,Vec in,Vec out,void*){
 //		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1]) + n*E_e/nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
 
 		// simplified version - contradicts to jacobians!!
-		// with + for consistency with previous!
 		double dk = nak[0]*(1-gamma_0_2) + n*E_e/nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
 
 		dk /= 2*PI;
@@ -802,22 +807,23 @@ PetscErrorCode ijacobian_tm(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 }
 
 void wrap_ksi_in_vec(Vec u){
-	int begin, end;
-	VecGetOwnershipRange(u, &begin, &end);
+	int size;
+	VecGetLocalSize(u, &size);
 
 	int rank;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-	if(rank==0)
-		begin = 2;
-
-	// need ksi only
-	begin += 2;
 
 	double* arr;
 	VecGetArray(u, &arr);
 
-	for(int i=0; i<(end-begin); i+=3){
+	int i;			// point at ksi
+	if(rank==0)
+		i = 4;
+	else
+		i= 2;
+
+	for(; i<size; i+=3){
 		//fprintf(stderr, "%lf:", arr[i]);
 		if(arr[i] > 0.5)
 			arr[i] -= 1.0;
