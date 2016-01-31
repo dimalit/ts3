@@ -125,7 +125,9 @@ PetscErrorCode step_monitor(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx
 
 	// get final RHS
 	Vec rhs;
-	ierr = TSGetRHSFunction(ts, &rhs, NULL, NULL);CHKERRQ(ierr);
+	TSRHSFunction func;
+	ierr = TSGetRHSFunction(ts, &rhs, &func, NULL);CHKERRQ(ierr);
+	func(ts, time, u, rhs, NULL);	// XXX: why I need to call func instead of getting rhs from TSGetRhsFunction??
 
 //	VecView(u, PETSC_VIEWER_STDERR_WORLD);
 //	VecView(rhs, PETSC_VIEWER_STDERR_WORLD);

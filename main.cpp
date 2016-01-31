@@ -169,6 +169,8 @@ bool step_func(Vec res, Vec res_rhs, int passed_steps, double passed_time){
 	clock_t t2 = clock();
 	double dtime = (double)(t2-t1)/CLOCKS_PER_SEC;
 
+//	VecView(res_rhs, PETSC_VIEWER_STDERR_(PETSC_COMM_WORLD));
+
 	// return if not using steps
 	if(!use_step && passed_steps < max_steps && passed_time < max_time)
 		return true;
