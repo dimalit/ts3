@@ -270,8 +270,8 @@ void state_to_vec(const E3State* state, Vec v){
 }
 
 void vec_to_state(Vec v, E3State* state){
-	double *arr;
-	VecGetArray(v, &arr);
+	const double *arr;
+	VecGetArrayRead(v, &arr);
 
 	PetscInt* borders;
 	VecGetOwnershipRanges(v, (const PetscInt**)&borders);
@@ -304,8 +304,15 @@ void vec_to_state(Vec v, E3State* state){
 			for(int i=0; i<count; i++){
 				E3State::Particles* p = state->mutable_particles(first+i);
 				p->set_eta(buf[i*3+0]);
-				p->set_a(buf[i*3+1]);
 				p->set_ksi(buf[i*3+2]);
+
+				double a = buf[i*3+1];
+				if(a > 0.5)
+					a -= 1.0;
+				else if(a < -0.5)
+					a += 1.0;
+
+				p->set_a(a);
 			}
 		}// for
 
@@ -313,10 +320,10 @@ void vec_to_state(Vec v, E3State* state){
 	}// if rank == 0
 	else{
 		int count3 = borders[rank+1] - borders[rank];
-		int ierr = MPI_Send(arr, count3, MPI_DOUBLE, 0, 0, PETSC_COMM_WORLD);
+		int ierr = MPI_Send((double*)arr, count3, MPI_DOUBLE, 0, 0, PETSC_COMM_WORLD);
 		assert(MPI_SUCCESS == ierr);
 	}// if rank != 0
 
-	VecRestoreArray(v, &arr);
+	VecRestoreArrayRead(v, &arr);
 }
 

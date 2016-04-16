@@ -808,6 +808,8 @@ PetscErrorCode ijacobian_tm(TS ts,PetscReal t,Vec X,Vec Xdot,PetscReal shift, Ma
 	return 0;
 }
 
+// turned it off because PETSc 5.6 does not allow to change vector in step
+// now wrap is done in vec_to_state
 void wrap_ksi_in_vec(Vec u){
 	int size;
 	VecGetLocalSize(u, &size);
@@ -842,7 +844,7 @@ void wrap_ksi_in_vec(Vec u){
 PetscErrorCode wrap_function(TS ts,PetscInt steps,PetscReal time,Vec u,void *mctx){
 //	Vec u;
 //	TSGetSolution(ts, &u);
-	wrap_ksi_in_vec(u);
+//	wrap_ksi_in_vec(u);
 
 	return 0;
 	// and consider small a also
