@@ -17,6 +17,7 @@ int m;
 double n;
 double theta_e, delta_e, r_e, gamma_0_2;
 double a0;
+double alpha;	// may be used to tie eta to a: eta=-alpha*a
 
 const double PI = 4*atan(1.0);
 //now we have a0 in state at protobuf: double *array_a0;					// needed for RHS
@@ -565,8 +566,8 @@ PetscErrorCode RHSFunction_tm(TS ts, PetscReal t,Vec in,Vec out,void*){
 		VecGetValues(in, 3, indices, nak);
 
 //		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1]) + n*E_e/nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);
-		double dn = -r_e*E_e*Jn(nak[1])*cos(2*PI*nak[2]+phi_e);
 		double da = -n/nak[1]*E_e*Jn(nak[1])*cos(2*PI*nak[2]+phi_e);
+		double dn = -r_e*E_e*Jn(nak[1])*cos(2*PI*nak[2]+phi_e) - alpha*da;
 
 		//previous version - before simplifications - corresponds to Jacobians!!
 //		double dk = nak[0] + 0.5*n*gamma_0_2*r_e*(a0*a0 - nak[1]*nak[1]) + n*E_e/nak[1]*Jn_(nak[1])*sin(2*PI*nak[2]+phi_e);

@@ -119,6 +119,7 @@ int main(int argc, char** argv){
 	delta_e = pconfig.delta_e();
 	r_e = pconfig.r_e();
 	gamma_0_2 = pconfig.gamma_0_2();
+	alpha = pconfig.alpha();
 
 	use_ifunction = false;
 	use_ijacobian = false;
@@ -304,15 +305,15 @@ void vec_to_state(Vec v, E3State* state){
 			for(int i=0; i<count; i++){
 				E3State::Particles* p = state->mutable_particles(first+i);
 				p->set_eta(buf[i*3+0]);
-				p->set_ksi(buf[i*3+2]);
+				p->set_a  (buf[i*3+1]);
 
-				double a = buf[i*3+1];
-				if(a > 0.5)
-					a -= 1.0;
-				else if(a < -0.5)
-					a += 1.0;
+				double ksi = buf[i*3+2];
+				if(ksi > 0.5)
+					ksi -= 1.0;
+				else if(ksi < -0.5)
+					ksi += 1.0;
 
-				p->set_a(a);
+				p->set_ksi(ksi);
 			}
 		}// for
 
